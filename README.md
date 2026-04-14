@@ -109,20 +109,20 @@ Copy the following into your `.env` file and replace the placeholder values with
 
 ```ini
 # --- LLM Configuration ---
-# Set the provider to "ollama" or "openai"
-LLM_PROVIDER="ollama"
-
-# Ollama settings (if using)
-OLLAMA_MODEL="gemma"
-OLLAMA_BASE_URL="http://localhost:11434"
-
-# OpenAI settings (if using)
-OPENAI_API_KEY="your-openai-api-key"
-OPENAI_MODEL="gpt-4o"
+# Set the provider: "ollama", "openai", etc.
+LLM_PROVIDER="ollama" 
+# Set the model name for the selected provider (e.g., "gemma", "gpt-4o")
+LLM_MODEL="gemma"
+# Set the base URL for the LLM API (required for local models like Ollama)
+LLM_BASE_URL="http://localhost:11434"
 
 # --- API Keys and Paths ---
+# Required if using LLM_PROVIDER="openai"
+OPENAI_API_KEY="your-openai-api-key"
+# Required for web search functionality
 TAVILY_API_KEY="your-tavily-api-key"
-OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault" # Use an absolute path
+# Absolute path to your Obsidian vault's root directory
+OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 ```
 
 **Important**:

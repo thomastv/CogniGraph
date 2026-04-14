@@ -36,13 +36,12 @@ logging.info("Loaded environment variables")
 
 # Get configuration from environment variables
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemma")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 OBSIDIAN_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH")
-logging.info(f"LLM Provider: {LLM_PROVIDER}")
+logging.info(f"LLM Provider: {LLM_PROVIDER}, Model: {LLM_MODEL}")
 
 # --- LLM Abstraction ---
 def get_llm():
@@ -52,10 +51,13 @@ def get_llm():
         if not OPENAI_API_KEY:
             logging.error("OPENAI_API_KEY is not set.")
             raise ValueError("OPENAI_API_KEY is not set in the .env file.")
-        return ChatOpenAI(api_key=OPENAI_API_KEY, model=OPENAI_MODEL, temperature=0)
+        return ChatOpenAI(api_key=OPENAI_API_KEY, model=LLM_MODEL, temperature=0)
     else: # Default to ollama
-        logging.info(f"Using Ollama model: {OLLAMA_MODEL} from {OLLAMA_BASE_URL}")
-        return ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
+        if not LLM_BASE_URL:
+            logging.error("LLM_BASE_URL is not set for Ollama.")
+            raise ValueError("LLM_BASE_URL is required for the 'ollama' provider.")
+        logging.info(f"Using Ollama model: {LLM_MODEL} from {LLM_BASE_URL}")
+        return ChatOllama(model=LLM_MODEL, base_url=LLM_BASE_URL, temperature=0)
 
 llm = get_llm()
 
