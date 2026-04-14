@@ -1,0 +1,9 @@
+langgraph
+langchain
+langchain_openai
+langchain_community
+langchain-ollama
+tavily-python
+streamlit
+python-dotenv
+sqlalchemy
