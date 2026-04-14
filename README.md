@@ -40,7 +40,6 @@ This project is built using LangGraph, Streamlit, and can be configured to use d
     *   (Optional) [Ollama](https://ollama.com/) installed and running for local LLM usage.
 
 2.  **Clone the Repository**:
-    If this were a git repository, you would clone it. For now, ensure you have the project files in a directory.
 
 3.  **Create a Virtual Environment**:
     It is highly recommended to use a virtual environment to manage dependencies.
