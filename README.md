@@ -6,6 +6,41 @@ A key feature of CogniGraph is its integration with Obsidian. It automatically s
 
 This project is built using LangGraph, Streamlit, and can be configured to use different Large Language Models (LLMs) like local models via Ollama or proprietary models from OpenAI.
 
+## Architecture Diagram
+
+The following diagram illustrates the flow of information within the CogniGraph agent:
+
+```mermaid
+graph TD
+    subgraph "User Interaction (Streamlit UI)"
+        A[User Input] --> B{LangGraph Agent};
+        B --> C[Display Response];
+    end
+
+    subgraph "LangGraph Core Logic"
+        B --> D(chat: Entry Point);
+        D --> E{router};
+        E -- Needs Web Search --> F[search: Tavily API];
+        F --> G[chat: Formulate Response w/ LLM];
+        E -- Direct Answer --> G;
+        G --> B;
+    end
+
+    subgraph "Data & Persistence"
+        B <--> H[(SQLite DB<br>Conversation History)];
+        I[End Session Button] --> J{Summarization Chain w/ LLM};
+        J --> K([Obsidian Vault<br>Save as .md]);
+    end
+
+    style A fill:#cde4ff
+    style C fill:#cde4ff
+    style I fill:#ffcdd2
+    style K fill:#d4edda
+    style H fill:#fff2cc
+    style E fill:#e0cffc
+
+```
+
 ## Features
 
 - **Conversational AI**: Engage in a natural conversation to ask questions and learn.
