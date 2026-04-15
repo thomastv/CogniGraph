@@ -27,7 +27,7 @@ graph TD
     end
 
     subgraph "Data & Persistence"
-        B <--> H[(SQLite DB<br>Conversation History)];
+        B --> H[(SQLite DB<br>User Preferences)];
         I[End Session Button] --> J{Summarization Chain w/ LLM};
         J --> K([Obsidian Vault<br>Save as .md]);
     end
@@ -49,7 +49,7 @@ graph TD
 - **Intelligent Routing**: The agent decides whether to answer from its existing knowledge or perform a web search.
 - **Automated Summarization**: At the end of a session, the agent summarizes the entire conversation, highlighting key takeaways.
 - **Obsidian Integration**: Automatically saves summaries as Markdown files in a specified Obsidian vault, creating links between concepts for graph visualization.
-- **Persistent Memory**: Conversation history is stored in a local SQLite database, allowing you to pick up where you left off (per session).
+- **Persistent Memory**: Stable user preferences are extracted and stored as key-value pairs in a local SQLite database.
 - **Simple UI**: A clean and straightforward chat interface built with Streamlit.
 - **Logging**: Detailed logs are generated in the `logs/` directory for easy debugging and monitoring.
 
@@ -57,13 +57,19 @@ graph TD
 
 ```
 .
-├── .venv/                  # Python virtual environment
+├── src/
+│   └── cognigraph/
+│       ├── ui.py           # Streamlit UI + app workflow
+│       ├── graph.py        # LangGraph workflow
+│       ├── llm.py          # LLM provider factory
+│       ├── preferences.py  # Preference extraction logic
+│       ├── db.py           # SQLite persistence layer
+│       ├── config.py       # Environment config loader
+│       └── logging_setup.py
+├── app.py                  # Thin Streamlit entrypoint
+├── pyproject.toml          # uv project configuration
+├── .env / .env.example     # Environment variables
 ├── logs/                   # Log files
-│   └── app.log
-├── .env                    # Environment variables and configuration
-├── app.py                  # Main Streamlit application, agent logic
-├── database.py             # SQLite database management
-├── requirements.txt        # Python dependencies
 └── README.md               # This file
 ```
 
@@ -76,31 +82,16 @@ graph TD
 
 2.  **Clone the Repository**:
 
-3.  **Create a Virtual Environment**:
-    It is highly recommended to use a virtual environment to manage dependencies.
+3.  **Install uv**:
+    Follow the official instructions: https://docs.astral.sh/uv/getting-started/installation/
+
+4.  **Create the Environment and Install Dependencies**:
 
     ```bash
-    python -m venv .venv
+    uv sync
     ```
 
-4.  **Activate the Environment**:
-    *   **Windows**:
-        ```powershell
-        .\.venv\Scripts\Activate.ps1
-        ```
-    *   **macOS/Linux**:
-        ```bash
-        source .venv/bin/activate
-        ```
-
-5.  **Install Dependencies**:
-    Install all required packages using the `requirements.txt` file.
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-6.  **Configure Environment Variables**:
+5.  **Configure Environment Variables**:
     Create a file named `.env` in the root of the project directory and populate it with your configuration. A template is provided below.
 
 ## Configuration (`.env` file)
@@ -131,7 +122,10 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 
 ## Usage
 
-1.  **Activate the virtual environment** if you haven't already.
+1.  **Install dependencies** (if not already done):
+    ```bash
+    uv sync
+    ```
 
 2.  **(Optional) Start Ollama**: If you are using `LLM_PROVIDER="ollama"`, make sure your Ollama application is running and the specified model (`gemma` by default) is downloaded.
     ```bash
@@ -142,7 +136,7 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
     Start the Streamlit application from your terminal.
 
     ```bash
-    streamlit run app.py
+    uv run streamlit run app.py
     ```
 
 4.  **Interact with the Agent**:
