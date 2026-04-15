@@ -3,3 +3,4 @@ __pycache__/
 cognigraph.db
 .env
 .vscode/
+.langgraph_api/

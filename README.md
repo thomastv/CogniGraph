@@ -62,11 +62,12 @@ graph TD
 │       ├── ui.py           # Streamlit UI + app workflow
 │       ├── graph.py        # LangGraph workflow
 │       ├── llm.py          # LLM provider factory
-│       ├── preferences.py  # Preference extraction logic
+│       ├── server_graphs.py # LangGraph API entrypoints
 │       ├── db.py           # SQLite persistence layer
 │       ├── config.py       # Environment config loader
 │       └── logging_setup.py
 ├── app.py                  # Thin Streamlit entrypoint
+├── langgraph.json          # LangGraph server config
 ├── pyproject.toml          # uv project configuration
 ├── .env / .env.example     # Environment variables
 ├── logs/                   # Log files
@@ -146,6 +147,38 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 5.  **Save Notes**:
     - When you are finished with a topic, click the **"End Session & Save Notes"** button.
     - The agent will summarize the conversation and save it as a new Markdown file in the `AINotes` folder inside your specified Obsidian vault.
+
+## LangGraph API + Agent Chat UI (Local)
+
+You can run the graph as an API and connect LangChain Agent Chat UI locally.
+
+1.  **Start local LangGraph API server**:
+    If `langgraph dev` asks for `langgraph-api`, install the in-memory runtime first:
+    ```bash
+    .\\.venv\\Scripts\\python.exe -m pip install "langgraph-cli[inmem]"
+    ```
+
+    Then start the server:
+    ```bash
+    uv run langgraph dev
+    ```
+
+    Expected local endpoint is typically `http://localhost:2024`.
+
+2.  **Start Agent Chat UI**:
+    ```bash
+    npx create-agent-chat-app --project-name cognigraph-chat-ui
+    cd cognigraph-chat-ui
+    pnpm install
+    pnpm dev
+    ```
+
+3.  **Connect UI to your local graph**:
+    - Graph ID: `cognigraph`
+    - Deployment URL: `http://localhost:2024`
+    - LangSmith key: optional for local usage
+
+This setup is configured via [langgraph.json](langgraph.json).
 
 ## Logging
 

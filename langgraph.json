@@ -1,0 +1,9 @@
+{
+  "python_version": "3.11",
+  "env": ".env",
+  "dependencies": ["./src"],
+  "graphs": {
+    "cognigraph": "./src/cognigraph/server_graphs.py:graph",
+    "summary": "./src/cognigraph/server_graphs.py:summary_graph"
+  }
+}
