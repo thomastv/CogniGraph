@@ -13,35 +13,38 @@ def get_db_connection():
         conn.close()
 
 def initialize_database():
-    """Initializes the database and creates the conversations table if it doesn't exist."""
+    """Initializes the database and creates tables if they don't exist."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Table for user preferences (key-value store)
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                session_id TEXT PRIMARY KEY,
-                history TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
         """)
         conn.commit()
 
-def save_conversation(session_id, history):
-    """Saves or updates a conversation in the database."""
+def save_preference(key, value):
+    """Saves or updates a user preference in the database."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO conversations (session_id, history)
+            INSERT INTO user_preferences (key, value)
             VALUES (?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET history = excluded.history
-        """, (session_id, history))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (key, value))
         conn.commit()
 
-def load_conversation(session_id):
-    """Loads a conversation from the database."""
+def load_all_preferences():
+    """Loads all user preferences from the database into a dictionary."""
+    prefs = {}
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT history FROM conversations WHERE session_id = ?", (session_id,))
-        result = cursor.fetchone()
-        return result[0] if result else None
+        cursor.execute("SELECT key, value FROM user_preferences")
+        for row in cursor.fetchall():
+            prefs[row[0]] = row[1]
+    return prefs
 
 # Initialize the database when this module is loaded
 initialize_database()

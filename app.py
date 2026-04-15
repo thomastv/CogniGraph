@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, List
 import operator
 from langchain_community.tools.tavily_search import TavilySearchResults
-from database import save_conversation, load_conversation, initialize_database
+from database import initialize_database, save_preference
 
 # --- Logging Setup ---
 LOG_DIR = "logs"
@@ -60,6 +60,40 @@ def get_llm():
         return ChatOllama(model=LLM_MODEL, base_url=LLM_BASE_URL, temperature=0)
 
 llm = get_llm()
+
+
+def extract_and_save_preference(user_message: str):
+    """Extract a single preference/fact from user input and save it as key-value."""
+    logging.info("Running preference extraction")
+    extraction_prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "Extract stable user preferences/facts from the user message. "
+            "If present, return ONLY JSON in this format: {\"key\":\"snake_case_key\",\"value\":\"value\"}. "
+            "If nothing is worth saving, return {}.",
+        ),
+        ("human", "User message: {message}"),
+    ])
+
+    chain = extraction_prompt | llm | StrOutputParser()
+    raw_output = chain.invoke({"message": user_message})
+
+    cleaned_output = raw_output.strip()
+    if "```json" in cleaned_output:
+        cleaned_output = cleaned_output.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif cleaned_output.startswith("```"):
+        cleaned_output = cleaned_output.split("```", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        extracted = json.loads(cleaned_output)
+        if isinstance(extracted, dict) and extracted.get("key") and extracted.get("value"):
+            key = str(extracted["key"]).strip()
+            value = str(extracted["value"]).strip()
+            if key and value:
+                save_preference(key, value)
+                logging.info(f"Saved user preference: {key}={value}")
+    except json.JSONDecodeError:
+        logging.info("No valid preference JSON extracted from this message")
 
 # --- LangGraph Agent Definition ---
 
@@ -133,15 +167,8 @@ if "session_id" not in st.session_state:
     logging.info(f"New session started: {st.session_state.session_id}")
 
 if "messages" not in st.session_state:
-    # Try to load from DB, otherwise start fresh
-    logging.info(f"Loading conversation for session: {st.session_state.session_id}")
-    history = load_conversation(st.session_state.session_id)
-    if history:
-        st.session_state.messages = [AIMessage(**msg) if msg.get('type') == 'ai' else HumanMessage(**msg) for msg in json.loads(history)]
-        logging.info("Loaded conversation from database")
-    else:
-        st.session_state.messages = [AIMessage(content="Hi, I'm CogniGraph. How can I help you learn something new today?")]
-        logging.info("Started a new conversation")
+    st.session_state.messages = [AIMessage(content="Hi, I'm CogniGraph. How can I help you learn something new today?")]
+    logging.info("Started a new conversation")
 
 # Display chat messages
 for msg in st.session_state.messages:
@@ -156,6 +183,9 @@ if prompt := st.chat_input():
     st.chat_message("user").write(prompt)
     logging.info(f"User input: {prompt}")
 
+    # Extract and persist user preferences/facts without altering existing chat flow.
+    extract_and_save_preference(prompt)
+
     # Invoke graph
     logging.info("Invoking graph")
     response = app.invoke({"messages": [HumanMessage(content=prompt)]})
@@ -163,11 +193,6 @@ if prompt := st.chat_input():
     st.session_state.messages.append(ai_response)
     st.chat_message("assistant").write(ai_response.content)
     logging.info(f"AI response: {ai_response.content}")
-
-    # Save conversation to DB
-    logging.info("Saving conversation to database")
-    save_conversation(st.session_state.session_id, json.dumps([m.dict() for m in st.session_state.messages]))
-    logging.info("Conversation saved")
 
 # Summarize and save button
 if st.button("End Session & Save Notes"):
@@ -205,7 +230,4 @@ if st.button("End Session & Save Notes"):
     # Clear session for next conversation
     logging.info("Ending session and clearing state")
     st.session_state.messages = [AIMessage(content="Session ended. Ready for a new topic!")]
-    # Correctly serialize messages for JSON
-    serializable_messages = [{'type': 'ai', 'content': m.content} if isinstance(m, AIMessage) else {'type': 'human', 'content': m.content} for m in st.session_state.messages]
-    save_conversation(st.session_state.session_id, json.dumps(serializable_messages)) # Save initial message
     st.rerun()
