@@ -4,15 +4,12 @@ import uuid
 
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 
 from cognigraph.config import load_settings
 from cognigraph.db import initialize_database
-from cognigraph.graph import build_graph
+from cognigraph.graph import build_graph, build_summary_graph
 from cognigraph.llm import get_llm
 from cognigraph.logging_setup import configure_logging
-from cognigraph.preferences import extract_and_save_preference
 
 
 def render_app() -> None:
@@ -28,6 +25,7 @@ def render_app() -> None:
 
     llm = get_llm(settings)
     app = build_graph(llm)
+    summary_app = build_summary_graph(llm)
 
     st.title("CogniGraph 🧠")
 
@@ -55,8 +53,6 @@ def render_app() -> None:
         st.chat_message("user").write(prompt)
         logging.info(f"User input: {prompt}")
 
-        extract_and_save_preference(llm, prompt)
-
         logging.info("Invoking graph")
         response = app.invoke({"messages": [HumanMessage(content=prompt)]})
         ai_response = response["messages"][-1]
@@ -67,28 +63,16 @@ def render_app() -> None:
     if st.button("End Session & Save Notes"):
         logging.info("'End Session & Save Notes' button clicked")
 
-        summarization_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful assistant that summarizes conversations. "
-                    "Your summary should be concise and include key points. "
-                    "Wrap related concepts in double brackets for Obsidian graph view, like [[this]].",
-                ),
-                ("human", "Please summarize the following conversation:\n\n{conversation_history}"),
-            ]
-        )
-
-        summarization_chain = summarization_prompt | llm | StrOutputParser()
-        logging.info("Invoking summarization chain")
-
         history_string = "\n".join(
             [
                 f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}"
                 for m in st.session_state.messages
             ]
         )
-        summary = summarization_chain.invoke({"conversation_history": history_string})
+
+        logging.info("Invoking summary graph")
+        summary_response = summary_app.invoke({"conversation_history": history_string})
+        summary = summary_response["summary"]
 
         logging.info("Summarization complete")
 
