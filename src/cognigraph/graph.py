@@ -1,5 +1,5 @@
 import logging
-from typing import Annotated, Any, List, TypedDict
+from typing import Annotated, Any, Callable, List, TypedDict
 
 from langchain_tavily import TavilySearch
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
@@ -19,6 +19,9 @@ class AgentState(TypedDict):
 class PreferenceExtraction(BaseModel):
     key: str | None = Field(default=None, description="Stable preference key in snake_case")
     value: str | None = Field(default=None, description="Preference value")
+
+
+SavePreferenceFn = Callable[[str, str], None]
 
 
 def _message_content(message: Any) -> str:
@@ -49,15 +52,28 @@ def _normalize_messages(messages: List[Any]) -> List[AnyMessage]:
     return normalized
 
 
-def build_graph(llm):
-    """Build and compile the LangGraph workflow."""
+def make_extract_preference_node(
+    preference_llm,
+    save_preference_fn: SavePreferenceFn,
+):
+    """Create a node function that extracts and stores durable user preferences."""
 
-    tavily_tool = TavilySearch()
-    llm_with_tools = llm.bind_tools([tavily_tool])
-    preference_llm = llm.with_structured_output(PreferenceExtraction)
+    extraction_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "Extract stable user preferences/facts from the user message. "
+                "Return a key/value pair only if the message includes durable preferences "
+                "that will likely matter in future conversations. "
+                "If nothing should be saved, return null fields.",
+            ),
+            ("human", "User message: {message}"),
+        ]
+    )
+
+    chain = extraction_prompt | preference_llm
 
     def extract_preference_node(state):
-        """Extract and persist stable user preferences from the latest user message."""
         logging.info("Executing extract_preference node")
         if not state.get("messages"):
             logging.info("No messages found for preference extraction")
@@ -74,20 +90,6 @@ def build_graph(llm):
             logging.info("Latest user message is empty; skipping extraction")
             return {}
 
-        extraction_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "Extract stable user preferences/facts from the user message. "
-                    "Return a key/value pair only if the message includes durable preferences "
-                    "that will likely matter in future conversations. "
-                    "If nothing should be saved, return null fields.",
-                ),
-                ("human", "User message: {message}"),
-            ]
-        )
-
-        chain = extraction_prompt | preference_llm
         try:
             extracted = chain.invoke({"message": user_message})
         except Exception as exc:
@@ -97,10 +99,16 @@ def build_graph(llm):
         key = (extracted.key or "").strip() if extracted else ""
         value = (extracted.value or "").strip() if extracted else ""
         if key and value:
-            save_preference(key, value)
+            save_preference_fn(key, value)
             logging.info(f"Saved user preference: {key}={value}")
 
         return {}
+
+    return extract_preference_node
+
+
+def make_assistant_node(llm_with_tools):
+    """Create a node function that drives LLM responses with bound tools."""
 
     def assistant_node(state):
         logging.info("Executing assistant node")
@@ -109,6 +117,26 @@ def build_graph(llm):
 
         messages = _normalize_messages(state["messages"])
         return {"messages": [llm_with_tools.invoke(messages)]}
+
+    return assistant_node
+
+
+def build_graph(
+    llm,
+    save_preference_fn: SavePreferenceFn | None = None,
+):
+    """Build and compile the LangGraph workflow."""
+
+    tavily_tool = TavilySearch()
+    llm_with_tools = llm.bind_tools([tavily_tool])
+    preference_llm = llm.with_structured_output(PreferenceExtraction)
+    persistence_callback = save_preference_fn or save_preference
+
+    extract_preference_node = make_extract_preference_node(
+        preference_llm,
+        persistence_callback,
+    )
+    assistant_node = make_assistant_node(llm_with_tools)
 
     workflow = StateGraph(AgentState)
     workflow.add_node("extract_preference", extract_preference_node)
