@@ -54,7 +54,7 @@ def render_app() -> None:
         logging.info(f"User input: {prompt}")
 
         logging.info("Invoking graph")
-        response = app.invoke({"messages": [HumanMessage(content=prompt)]})
+        response = app.invoke({"messages": st.session_state.messages})
         ai_response = response["messages"][-1]
         st.session_state.messages.append(ai_response)
         st.chat_message("assistant").write(ai_response.content)
