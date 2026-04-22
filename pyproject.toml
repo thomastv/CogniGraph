@@ -11,13 +11,11 @@ dependencies = [
     "langgraph-runtime-inmem",
     "langchain",
     "langchain-openai",
-    "langchain-community",
     "langchain-tavily",
     "langchain-ollama",
     "tavily-python",
     "streamlit",
     "python-dotenv",
-    "sqlalchemy",
 ]
 
 [tool.uv]
