@@ -1,18 +1,24 @@
 import logging
-import operator
 from typing import Annotated, Any, List, TypedDict
-import json
 
 from langchain_tavily import TavilySearch
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph.message import add_messages
 from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
 from cognigraph.db import save_preference
 
 
 class AgentState(TypedDict):
-    messages: Annotated[List[AnyMessage], operator.add]
+    messages: Annotated[List[AnyMessage], add_messages]
+
+
+class PreferenceExtraction(BaseModel):
+    key: str | None = Field(default=None, description="Stable preference key in snake_case")
+    value: str | None = Field(default=None, description="Preference value")
 
 
 def _message_content(message: Any) -> str:
@@ -36,126 +42,86 @@ def _normalize_messages(messages: List[Any]) -> List[AnyMessage]:
             else:
                 normalized.append(HumanMessage(content=content))
             continue
-        normalized.append(message)
+        if isinstance(message, BaseMessage):
+            normalized.append(message)
+            continue
+        normalized.append(HumanMessage(content=str(message)))
     return normalized
 
 
 def build_graph(llm):
     """Build and compile the LangGraph workflow."""
 
+    tavily_tool = TavilySearch()
+    llm_with_tools = llm.bind_tools([tavily_tool])
+    preference_llm = llm.with_structured_output(PreferenceExtraction)
+
     def extract_preference_node(state):
-        """Extract and persist a stable user preference from the latest message."""
+        """Extract and persist stable user preferences from the latest user message."""
         logging.info("Executing extract_preference node")
         if not state.get("messages"):
             logging.info("No messages found for preference extraction")
             return {}
 
-        user_message = _message_content(state["messages"][-1])
+        messages = _normalize_messages(state["messages"])
+        latest_message = messages[-1]
+        if not isinstance(latest_message, HumanMessage):
+            logging.info("Latest message is not from the user; skipping extraction")
+            return {}
+
+        user_message = _message_content(latest_message).strip()
+        if not user_message:
+            logging.info("Latest user message is empty; skipping extraction")
+            return {}
 
         extraction_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
                     "Extract stable user preferences/facts from the user message. "
-                    "If present, return ONLY JSON in this format: {{\"key\":\"snake_case_key\",\"value\":\"value\"}}. "
-                    "If nothing is worth saving, return {{}}.",
+                    "Return a key/value pair only if the message includes durable preferences "
+                    "that will likely matter in future conversations. "
+                    "If nothing should be saved, return null fields.",
                 ),
                 ("human", "User message: {message}"),
             ]
         )
 
-        chain = extraction_prompt | llm | StrOutputParser()
-        raw_output = chain.invoke({"message": user_message})
-
-        cleaned_output = raw_output.strip()
-        if "```json" in cleaned_output:
-            cleaned_output = cleaned_output.split("```json", 1)[1].split("```", 1)[0].strip()
-        elif cleaned_output.startswith("```"):
-            cleaned_output = cleaned_output.split("```", 1)[1].rsplit("```", 1)[0].strip()
-
+        chain = extraction_prompt | preference_llm
         try:
-            extracted = json.loads(cleaned_output)
-            if isinstance(extracted, dict) and extracted.get("key") and extracted.get("value"):
-                key = str(extracted["key"]).strip()
-                value = str(extracted["value"]).strip()
-                if key and value:
-                    save_preference(key, value)
-                    logging.info(f"Saved user preference: {key}={value}")
-        except json.JSONDecodeError:
-            logging.info("No valid preference JSON extracted from this message")
+            extracted = chain.invoke({"message": user_message})
+        except Exception as exc:
+            logging.warning(f"Preference extraction failed: {exc}")
+            return {}
+
+        key = (extracted.key or "").strip() if extracted else ""
+        value = (extracted.value or "").strip() if extracted else ""
+        if key and value:
+            save_preference(key, value)
+            logging.info(f"Saved user preference: {key}={value}")
 
         return {}
 
-    def chat_node(state):
-        logging.info("Executing chat node")
+    def assistant_node(state):
+        logging.info("Executing assistant node")
         if not state.get("messages"):
             return {"messages": [AIMessage(content="Please send a message to begin.")]}
 
         messages = _normalize_messages(state["messages"])
-        return {"messages": [llm.invoke(messages)]}
-
-    def search_node(state):
-        if not state.get("messages"):
-            return {"messages": [AIMessage(content="I need a user message before searching.")]}
-
-        query = _message_content(state["messages"][-1])
-        if not query:
-            return {"messages": [AIMessage(content="I need a non-empty query before searching.")]}
-
-        logging.info(f"Executing search node for query: {query}")
-        tavily_tool = TavilySearch()
-        result = tavily_tool.invoke({"query": query})
-        logging.info("Search complete")
-        return {"messages": [AIMessage(content=result)]}
-
-    def router(state):
-        """Route message to search or direct chat response."""
-        logging.info("Executing router")
-
-        if not state.get("messages"):
-            logging.info("Router found no messages; defaulting to chat")
-            return "chat"
-
-        user_message = _message_content(state["messages"][-1])
-        if not user_message:
-            logging.info("Router found empty message; defaulting to chat")
-            return "chat"
-
-        router_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are an expert at routing user questions. "
-                    "Based on the user's message, decide if you should search the web "
-                    "for more information or if you can answer from your existing knowledge. "
-                    "Respond with only 'search' or 'chat'.",
-                ),
-                ("human", "User message: {message}"),
-            ]
-        )
-
-        chain = router_prompt | llm | StrOutputParser()
-        result = chain.invoke({"message": user_message})
-
-        if "search" in result.lower():
-            logging.info("Router decision: search")
-            return "search"
-
-        logging.info("Router decision: chat")
-        return "chat"
+        return {"messages": [llm_with_tools.invoke(messages)]}
 
     workflow = StateGraph(AgentState)
     workflow.add_node("extract_preference", extract_preference_node)
-    workflow.add_node("chat", chat_node)
-    workflow.add_node("search", search_node)
+    workflow.add_node("assistant", assistant_node)
+    workflow.add_node("tools", ToolNode([tavily_tool]))
 
-    workflow.add_edge("extract_preference", "chat")
+    workflow.add_edge("extract_preference", "assistant")
     workflow.add_conditional_edges(
-        "chat",
-        router,
-        {"search": "search", "chat": END},
+        "assistant",
+        tools_condition,
+        {"tools": "tools", END: END},
     )
-    workflow.add_edge("search", "chat")
+    workflow.add_edge("tools", "assistant")
     workflow.set_entry_point("extract_preference")
 
     app = workflow.compile()
