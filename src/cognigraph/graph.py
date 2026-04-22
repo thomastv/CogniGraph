@@ -3,7 +3,7 @@ import operator
 from typing import Annotated, Any, List, TypedDict
 import json
 
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -103,7 +103,7 @@ def build_graph(llm):
             return {"messages": [AIMessage(content="I need a non-empty query before searching.")]}
 
         logging.info(f"Executing search node for query: {query}")
-        tavily_tool = TavilySearchResults()
+        tavily_tool = TavilySearch()
         result = tavily_tool.invoke({"query": query})
         logging.info("Search complete")
         return {"messages": [AIMessage(content=result)]}
