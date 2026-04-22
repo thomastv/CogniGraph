@@ -1,6 +1,13 @@
 """LangGraph server entrypoints for local/dev deployment."""
 
 import logging
+import sys
+from pathlib import Path
+
+# Ensure src/ is importable when LangGraph loads this file directly.
+SRC_DIR = Path(__file__).resolve().parents[1]
+if str(SRC_DIR) not in sys.path:
+	sys.path.insert(0, str(SRC_DIR))
 
 from cognigraph.config import load_settings
 from cognigraph.db import initialize_database

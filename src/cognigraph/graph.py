@@ -1,10 +1,10 @@
 import logging
 import operator
-from typing import Annotated, List, TypedDict
+from typing import Annotated, Any, List, TypedDict
 import json
 
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
@@ -12,7 +12,32 @@ from cognigraph.db import save_preference
 
 
 class AgentState(TypedDict):
-    messages: Annotated[List[any], operator.add]
+    messages: Annotated[List[AnyMessage], operator.add]
+
+
+def _message_content(message: Any) -> str:
+    """Extract message content from dict-style or message-object inputs."""
+    if isinstance(message, dict):
+        return str(message.get("content", ""))
+    return str(getattr(message, "content", ""))
+
+
+def _normalize_messages(messages: List[Any]) -> List[AnyMessage]:
+    """Convert incoming dict-style messages to LangChain message objects."""
+    normalized: List[AnyMessage] = []
+    for message in messages:
+        if isinstance(message, dict):
+            role = (message.get("role") or message.get("type") or "user").lower()
+            content = str(message.get("content", ""))
+            if role in ("assistant", "ai"):
+                normalized.append(AIMessage(content=content))
+            elif role == "system":
+                normalized.append(SystemMessage(content=content))
+            else:
+                normalized.append(HumanMessage(content=content))
+            continue
+        normalized.append(message)
+    return normalized
 
 
 def build_graph(llm):
@@ -21,15 +46,19 @@ def build_graph(llm):
     def extract_preference_node(state):
         """Extract and persist a stable user preference from the latest message."""
         logging.info("Executing extract_preference node")
-        user_message = state["messages"][-1].content
+        if not state.get("messages"):
+            logging.info("No messages found for preference extraction")
+            return {}
+
+        user_message = _message_content(state["messages"][-1])
 
         extraction_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
                     "Extract stable user preferences/facts from the user message. "
-                    "If present, return ONLY JSON in this format: {\"key\":\"snake_case_key\",\"value\":\"value\"}. "
-                    "If nothing is worth saving, return {}.",
+                    "If present, return ONLY JSON in this format: {{\"key\":\"snake_case_key\",\"value\":\"value\"}}. "
+                    "If nothing is worth saving, return {{}}.",
                 ),
                 ("human", "User message: {message}"),
             ]
@@ -59,18 +88,38 @@ def build_graph(llm):
 
     def chat_node(state):
         logging.info("Executing chat node")
-        return {"messages": [llm.invoke(state["messages"])]}
+        if not state.get("messages"):
+            return {"messages": [AIMessage(content="Please send a message to begin.")]}
+
+        messages = _normalize_messages(state["messages"])
+        return {"messages": [llm.invoke(messages)]}
 
     def search_node(state):
-        logging.info(f"Executing search node for query: {state['messages'][-1].content}")
+        if not state.get("messages"):
+            return {"messages": [AIMessage(content="I need a user message before searching.")]}
+
+        query = _message_content(state["messages"][-1])
+        if not query:
+            return {"messages": [AIMessage(content="I need a non-empty query before searching.")]}
+
+        logging.info(f"Executing search node for query: {query}")
         tavily_tool = TavilySearchResults()
-        result = tavily_tool.invoke({"query": state["messages"][-1].content})
+        result = tavily_tool.invoke({"query": query})
         logging.info("Search complete")
         return {"messages": [AIMessage(content=result)]}
 
     def router(state):
         """Route message to search or direct chat response."""
         logging.info("Executing router")
+
+        if not state.get("messages"):
+            logging.info("Router found no messages; defaulting to chat")
+            return "chat"
+
+        user_message = _message_content(state["messages"][-1])
+        if not user_message:
+            logging.info("Router found empty message; defaulting to chat")
+            return "chat"
 
         router_prompt = ChatPromptTemplate.from_messages(
             [
@@ -86,7 +135,7 @@ def build_graph(llm):
         )
 
         chain = router_prompt | llm | StrOutputParser()
-        result = chain.invoke({"message": state["messages"][-1].content})
+        result = chain.invoke({"message": user_message})
 
         if "search" in result.lower():
             logging.info("Router decision: search")

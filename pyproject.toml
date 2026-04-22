@@ -3,10 +3,12 @@ name = "cognigraph"
 version = "0.1.0"
 description = "LLM-agnostic learning assistant with LangGraph, Streamlit, and Obsidian notes"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "langgraph",
     "langgraph-cli",
+    "langgraph-api>=0.8.0",
+    "langgraph-runtime-inmem",
     "langchain",
     "langchain-openai",
     "langchain-community",

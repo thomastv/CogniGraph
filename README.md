@@ -77,7 +77,7 @@ graph TD
 ## Setup and Installation
 
 1.  **Prerequisites**:
-    *   Python 3.9+
+    *   Python 3.11+
     *   An active internet connection
     *   (Optional) [Ollama](https://ollama.com/) installed and running for local LLM usage.
 
@@ -153,12 +153,17 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 You can run the graph as an API and connect LangChain Agent Chat UI locally.
 
 1.  **Start local LangGraph API server**:
-    If `langgraph dev` asks for `langgraph-api`, install the in-memory runtime first:
+    If your environment blocks spawning `langgraph` (Application Control), use the Python module entrypoint instead:
+    ```bash
+    uv run python -m langgraph_api.cli --config langgraph.json
+    ```
+
+    If `langgraph dev` / module entrypoint asks for `langgraph-api`, install the in-memory runtime first:
     ```bash
     .\\.venv\\Scripts\\python.exe -m pip install "langgraph-cli[inmem]"
     ```
 
-    Then start the server:
+    Then you can also start with the regular command:
     ```bash
     uv run langgraph dev
     ```
