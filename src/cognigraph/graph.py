@@ -7,7 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph.message import add_messages
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 from cognigraph.db import save_preference
 
@@ -221,14 +221,24 @@ def build_graph(
     assistant_node = make_assistant_node(llm_with_tools)
     summarize_node = make_summarize_node(llm)
 
-    def route_after_preference(state):
+    def route_after_assistant(state):
         messages = _normalize_messages(state.get("messages", []))
         if not messages:
-            return "assistant"
+            return END
+
         latest = messages[-1]
-        if isinstance(latest, HumanMessage) and _wants_summary(_message_content(latest)):
+        latest_human = next(
+            (message for message in reversed(messages) if isinstance(message, HumanMessage)),
+            None,
+        )
+
+        if latest_human and _wants_summary(_message_content(latest_human)):
             return "summarize"
-        return "assistant"
+
+        if isinstance(latest, AIMessage) and getattr(latest, "tool_calls", None):
+            return "tools"
+
+        return END
 
     workflow = StateGraph(AgentState)
     workflow.add_node("extract_preference", extract_preference_node)
@@ -236,15 +246,11 @@ def build_graph(
     workflow.add_node("summarize", summarize_node)
     workflow.add_node("tools", ToolNode([tavily_tool]))
 
-    workflow.add_conditional_edges(
-        "extract_preference",
-        route_after_preference,
-        {"summarize": "summarize", "assistant": "assistant"},
-    )
+    workflow.add_edge("extract_preference", "assistant")
     workflow.add_conditional_edges(
         "assistant",
-        tools_condition,
-        {"tools": "tools", END: END},
+        route_after_assistant,
+        {"summarize": "summarize", "tools": "tools", END: END},
     )
     workflow.add_edge("tools", "assistant")
     workflow.add_edge("summarize", END)

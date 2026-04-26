@@ -19,14 +19,13 @@ graph TD
 
     subgraph "LangGraph Core Logic"
         B --> D[extract_preference];
-        D --> E{intent check};
-        E -- Summary Request --> F[summarize node];
-        E -- Normal Chat --> G[assistant node];
-        G --> H{tool call?};
-        H -- yes --> I[Tavily ToolNode];
-        I --> G;
-        H -- no --> B;
-        F --> B;
+        D --> E[assistant node];
+        E --> F{post-assistant route};
+        F -- tool calls present --> G[Tavily ToolNode];
+        G --> E;
+        F -- summarize intent detected --> H[summarize node];
+        H --> B;
+        F -- no tool / no summarize --> B;
     end
 
     subgraph "Data & Persistence"
@@ -40,7 +39,7 @@ graph TD
     style K fill:#ffcdd2
     style M fill:#d4edda
     style J fill:#fff2cc
-    style E fill:#e0cffc
+    style F fill:#e0cffc
 
 ```
 
@@ -50,6 +49,7 @@ graph TD
 - **LLM Agnostic**: Easily switch between a locally hosted Ollama model (e.g., Gemma, Llama) and OpenAI's models (e.g., GPT-4o) via a simple configuration change.
 - **Web Search**: Integrates with Tavily Search API to provide current information on any topic.
 - **Native Tool Calling**: Uses LangChain tool binding + LangGraph `ToolNode` for web search.
+- **Post-Assistant Summary Routing**: Summarization intent is checked after assistant execution and can branch to a dedicated summarize node.
 - **In-Graph Summarization**: Summarization is part of the same graph and works from both Streamlit and Agent UI.
 - **Obsidian Integration**: Automatically saves summaries as Markdown files in a specified Obsidian vault, creating links between concepts for graph visualization.
 - **Persistent Memory**: Stable user preferences are extracted and stored as key-value pairs in a local SQLite database.
@@ -148,6 +148,7 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 5.  Summarize conversation:
     - Type `/summarize` in chat, or
     - Click **End Session & Save Notes** (this now triggers summarization through the same graph).
+    - Summaries are based on the current chat history (ongoing conversation context).
 
 6.  If Obsidian path is configured, summary is saved under `AINotes/` in your vault.
 
@@ -189,6 +190,7 @@ Run the unified graph as an API and connect from Agent UI or Studio.
 5.  **Trigger summarization in Agent UI**:
     - Send `/summarize` in chat.
     - The same unified graph handles chat, tools, and summarization.
+    - Summarization is intended for the current ongoing conversation context.
 
 This setup is configured via [langgraph.json](langgraph.json).
 
