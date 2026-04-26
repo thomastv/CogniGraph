@@ -1,9 +1,9 @@
 import logging
-import os
 import uuid
 
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import Command
 
 from cognigraph.config import load_settings
 from cognigraph.db import initialize_database
@@ -24,7 +24,11 @@ def render_app() -> None:
     )
 
     llm = get_llm(settings)
-    app = build_graph(llm)
+    app = build_graph(
+        llm,
+        obsidian_vault_path=settings.obsidian_vault_path,
+        use_inmemory_checkpointer=True,
+    )
 
     st.title("CogniGraph 🧠")
 
@@ -34,6 +38,14 @@ def render_app() -> None:
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
         logging.info(f"New session started: {st.session_state.session_id}")
+
+    if "graph_config" not in st.session_state:
+        st.session_state.graph_config = {
+            "configurable": {"thread_id": st.session_state.session_id}
+        }
+
+    if "awaiting_save_confirmation" not in st.session_state:
+        st.session_state.awaiting_save_confirmation = False
 
     if "messages" not in st.session_state:
         st.session_state.messages = [
@@ -48,47 +60,63 @@ def render_app() -> None:
             st.chat_message("user").write(msg.content)
 
     if prompt := st.chat_input():
+        is_resume = st.session_state.awaiting_save_confirmation
         st.session_state.messages.append(HumanMessage(content=prompt))
         st.chat_message("user").write(prompt)
         logging.info(f"User input: {prompt}")
 
         logging.info("Invoking graph")
-        response = app.invoke({"messages": st.session_state.messages})
-        ai_response = response["messages"][-1]
-        st.session_state.messages.append(ai_response)
-        st.chat_message("assistant").write(ai_response.content)
-        logging.info(f"AI response: {ai_response.content}")
+        if is_resume:
+            response = app.invoke(
+                Command(resume=prompt),
+                config=st.session_state.graph_config,
+            )
+            st.session_state.awaiting_save_confirmation = False
+        else:
+            response = app.invoke(
+                {"messages": [HumanMessage(content=prompt)]},
+                config=st.session_state.graph_config,
+            )
+
+        if "messages" in response and response["messages"]:
+            st.session_state.messages = response["messages"]
+            ai_response = st.session_state.messages[-1]
+            if isinstance(ai_response, AIMessage):
+                st.chat_message("assistant").write(ai_response.content)
+                logging.info(f"AI response: {ai_response.content}")
+
+        if response.get("__interrupt__"):
+            st.session_state.awaiting_save_confirmation = True
+            interrupt_prompt = (
+                "Do you want me to save this summary to your Obsidian vault? "
+                "Reply with yes or no."
+            )
+            st.session_state.messages.append(AIMessage(content=interrupt_prompt))
+            st.chat_message("assistant").write(interrupt_prompt)
+            logging.info("Waiting for user confirmation to save summary")
 
     if st.button("End Session & Save Notes"):
         logging.info("'End Session & Save Notes' button clicked")
 
         logging.info("Invoking unified graph summarization")
         summary_response = app.invoke(
-            {
-                "messages": [
-                    *st.session_state.messages,
-                    HumanMessage(content="/summarize"),
-                ]
-            }
+            {"messages": [HumanMessage(content="/summarize")]},
+            config=st.session_state.graph_config,
         )
-        summary = summary_response["messages"][-1].content
 
-        logging.info("Summarization complete")
+        if "messages" in summary_response and summary_response["messages"]:
+            st.session_state.messages = summary_response["messages"]
+            ai_response = st.session_state.messages[-1]
+            if isinstance(ai_response, AIMessage):
+                st.chat_message("assistant").write(ai_response.content)
+                logging.info(f"Summary response: {ai_response.content}")
 
-        if settings.obsidian_vault_path and os.path.isdir(settings.obsidian_vault_path):
-            notes_folder = os.path.join(settings.obsidian_vault_path, "AINotes")
-            os.makedirs(notes_folder, exist_ok=True)
-            file_name = f"CogniGraph_Summary_{st.session_state.session_id[:8]}.md"
-            file_path = os.path.join(notes_folder, file_name)
-            logging.info(f"Saving summary to: {file_path}")
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(summary)
-            st.success(f"Summary saved to {file_path}")
-            logging.info("Summary saved successfully")
-        else:
-            st.error("OBSIDIAN_VAULT_PATH is not a valid directory. Please check your .env file.")
-            logging.error(f"Invalid OBSIDIAN_VAULT_PATH: {settings.obsidian_vault_path}")
-
-        logging.info("Ending session and clearing state")
-        st.session_state.messages = [AIMessage(content="Session ended. Ready for a new topic!")]
-        st.rerun()
+        if summary_response.get("__interrupt__"):
+            st.session_state.awaiting_save_confirmation = True
+            interrupt_prompt = (
+                "Do you want me to save this summary to your Obsidian vault? "
+                "Reply with yes or no."
+            )
+            st.session_state.messages.append(AIMessage(content=interrupt_prompt))
+            st.chat_message("assistant").write(interrupt_prompt)
+            logging.info("Waiting for user confirmation to save summary")

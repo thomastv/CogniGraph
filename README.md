@@ -24,14 +24,17 @@ graph TD
         F -- tool calls present --> G[Tavily ToolNode];
         G --> E;
         F -- summarize intent detected --> H[summarize node];
-        H --> B;
+        H --> I{human approval interrupt};
+        I -- yes --> J[save_summary node];
+        J --> B;
+        I -- no --> B;
         F -- no tool / no summarize --> B;
     end
 
     subgraph "Data & Persistence"
         D --> J[(SQLite DB<br>User Preferences)];
         K[End Session Button] --> L[/summarize via graph/];
-        L --> M([Obsidian Vault<br>Save as .md]);
+        J --> M([Obsidian Vault<br>Save as .md]);
     end
 
     style A fill:#cde4ff
@@ -51,6 +54,7 @@ graph TD
 - **Native Tool Calling**: Uses LangChain tool binding + LangGraph `ToolNode` for web search.
 - **Post-Assistant Summary Routing**: Summarization intent is checked after assistant execution and can branch to a dedicated summarize node.
 - **In-Graph Summarization**: Summarization is part of the same graph and works from both Streamlit and Agent UI.
+- **Human-In-The-Loop Save Approval**: After summary generation, the graph interrupts and asks for explicit user approval before saving to Obsidian.
 - **Obsidian Integration**: Automatically saves summaries as Markdown files in a specified Obsidian vault, creating links between concepts for graph visualization.
 - **Persistent Memory**: Stable user preferences are extracted and stored as key-value pairs in a local SQLite database.
 - **Dual UI Support**: Works in Streamlit and in Agent UI / LangGraph Studio.
@@ -147,10 +151,11 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 
 5.  Summarize conversation:
     - Type `/summarize` in chat, or
-    - Click **End Session & Save Notes** (this now triggers summarization through the same graph).
+    - Click **End Session & Save Notes** (this triggers summarization through the same graph).
     - Summaries are based on the current chat history (ongoing conversation context).
+    - After the summary appears, reply `yes` or `no` when prompted to confirm whether it should be saved to Obsidian.
 
-6.  If Obsidian path is configured, summary is saved under `AINotes/` in your vault.
+6.  If approved and Obsidian path is configured, summary is saved under `AINotes/` in your vault.
 
 ### Option B: LangGraph API + Agent UI / Studio (Local)
 
@@ -191,6 +196,7 @@ Run the unified graph as an API and connect from Agent UI or Studio.
     - Send `/summarize` in chat.
     - The same unified graph handles chat, tools, and summarization.
     - Summarization is intended for the current ongoing conversation context.
+    - When prompted by the interrupt, reply `yes` to save to Obsidian or `no` to skip saving.
 
 This setup is configured via [langgraph.json](langgraph.json).
 

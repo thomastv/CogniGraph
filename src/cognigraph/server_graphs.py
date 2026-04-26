@@ -24,4 +24,4 @@ initialize_database()
 _llm = get_llm(settings)
 
 # Primary graph to connect from Agent Chat UI.
-graph = build_graph(_llm)
+graph = build_graph(_llm, obsidian_vault_path=settings.obsidian_vault_path)

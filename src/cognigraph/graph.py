@@ -1,5 +1,7 @@
 import logging
-from typing import Annotated, Any, Callable, List, TypedDict
+import os
+from datetime import datetime
+from typing import Annotated, Any, Callable, List, NotRequired, TypedDict
 
 from langchain_tavily import TavilySearch
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
@@ -7,13 +9,18 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph.message import add_messages
 from langgraph.graph import END, StateGraph
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 from cognigraph.db import save_preference
 
 
 class AgentState(TypedDict):
     messages: Annotated[List[AnyMessage], add_messages]
+    summary_text: NotRequired[str]
+    save_summary_approved: NotRequired[bool]
+    saved_summary_path: NotRequired[str]
 
 
 class PreferenceExtraction(BaseModel):
@@ -22,6 +29,7 @@ class PreferenceExtraction(BaseModel):
 
 
 SavePreferenceFn = Callable[[str, str], None]
+SaveSummaryFn = Callable[[str], str]
 
 
 SUMMARY_COMMANDS = (
@@ -95,6 +103,26 @@ def _conversation_history_from_messages(messages: List[AnyMessage]) -> str:
             history_lines.append(f"AI: {content}")
 
     return "\n".join(history_lines)
+
+
+def make_obsidian_summary_saver(obsidian_vault_path: str | None) -> SaveSummaryFn:
+    """Create a callback that saves summaries to an Obsidian vault."""
+
+    def save_summary_to_obsidian(summary: str) -> str:
+        if not obsidian_vault_path or not os.path.isdir(obsidian_vault_path):
+            raise ValueError("OBSIDIAN_VAULT_PATH is not configured or is not a valid directory.")
+
+        notes_folder = os.path.join(obsidian_vault_path, "AINotes")
+        os.makedirs(notes_folder, exist_ok=True)
+        file_name = f"CogniGraph_Summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        file_path = os.path.join(notes_folder, file_name)
+
+        with open(file_path, "w", encoding="utf-8") as file_handle:
+            file_handle.write(summary)
+
+        return file_path
+
+    return save_summary_to_obsidian
 
 
 def make_extract_preference_node(
@@ -198,14 +226,81 @@ def make_summarize_node(llm):
         summary = summarization_chain.invoke(
             {"conversation_history": conversation_history}
         )
-        return {"messages": [AIMessage(content=summary)]}
+        return {
+            "messages": [AIMessage(content=summary)],
+            "summary_text": summary,
+        }
 
     return summarize_node
+
+
+def make_confirm_save_summary_node():
+    """Create a HITL node asking whether summary should be saved to Obsidian."""
+
+    def confirm_save_summary_node(state):
+        summary_text = str(state.get("summary_text", "")).strip()
+        if not summary_text:
+            return {"save_summary_approved": False}
+
+        decision = interrupt(
+            {
+                "kind": "confirm_save_summary",
+                "question": "Do you want me to save this summary to your Obsidian vault?",
+                "options": ["yes", "no"],
+                "default": "no",
+            }
+        )
+        approved = str(decision).strip().lower() in {"y", "yes", "save", "true", "1"}
+        if approved:
+            return {"save_summary_approved": True}
+
+        return {
+            "save_summary_approved": False,
+            "messages": [AIMessage(content="Okay, I will not save this summary to Obsidian.")],
+        }
+
+    return confirm_save_summary_node
+
+
+def make_save_summary_node(save_summary_fn: SaveSummaryFn):
+    """Create a node that persists summary text after human approval."""
+
+    def save_summary_node(state):
+        summary_text = str(state.get("summary_text", "")).strip()
+        if not summary_text:
+            return {
+                "messages": [AIMessage(content="No summary text available to save.")],
+            }
+
+        try:
+            file_path = save_summary_fn(summary_text)
+        except Exception as exc:
+            logging.warning(f"Summary save failed: {exc}")
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "I could not save the summary to Obsidian. "
+                            "Please verify OBSIDIAN_VAULT_PATH and try again."
+                        )
+                    )
+                ]
+            }
+
+        return {
+            "saved_summary_path": file_path,
+            "messages": [AIMessage(content=f"Summary saved to {file_path}")],
+        }
+
+    return save_summary_node
 
 
 def build_graph(
     llm,
     save_preference_fn: SavePreferenceFn | None = None,
+    save_summary_fn: SaveSummaryFn | None = None,
+    obsidian_vault_path: str | None = None,
+    use_inmemory_checkpointer: bool = False,
 ):
     """Build and compile the LangGraph workflow."""
 
@@ -213,6 +308,7 @@ def build_graph(
     llm_with_tools = llm.bind_tools([tavily_tool])
     preference_llm = llm.with_structured_output(PreferenceExtraction)
     persistence_callback = save_preference_fn or save_preference
+    summary_save_callback = save_summary_fn or make_obsidian_summary_saver(obsidian_vault_path)
 
     extract_preference_node = make_extract_preference_node(
         preference_llm,
@@ -220,6 +316,8 @@ def build_graph(
     )
     assistant_node = make_assistant_node(llm_with_tools)
     summarize_node = make_summarize_node(llm)
+    confirm_save_summary_node = make_confirm_save_summary_node()
+    save_summary_node = make_save_summary_node(summary_save_callback)
 
     def route_after_assistant(state):
         messages = _normalize_messages(state.get("messages", []))
@@ -240,10 +338,17 @@ def build_graph(
 
         return END
 
+    def route_after_confirm_save(state):
+        if state.get("save_summary_approved"):
+            return "save_summary"
+        return END
+
     workflow = StateGraph(AgentState)
     workflow.add_node("extract_preference", extract_preference_node)
     workflow.add_node("assistant", assistant_node)
     workflow.add_node("summarize", summarize_node)
+    workflow.add_node("confirm_save_summary", confirm_save_summary_node)
+    workflow.add_node("save_summary", save_summary_node)
     workflow.add_node("tools", ToolNode([tavily_tool]))
 
     workflow.add_edge("extract_preference", "assistant")
@@ -253,9 +358,18 @@ def build_graph(
         {"summarize": "summarize", "tools": "tools", END: END},
     )
     workflow.add_edge("tools", "assistant")
-    workflow.add_edge("summarize", END)
+    workflow.add_edge("summarize", "confirm_save_summary")
+    workflow.add_conditional_edges(
+        "confirm_save_summary",
+        route_after_confirm_save,
+        {"save_summary": "save_summary", END: END},
+    )
+    workflow.add_edge("save_summary", END)
     workflow.set_entry_point("extract_preference")
 
-    app = workflow.compile()
+    if use_inmemory_checkpointer:
+        app = workflow.compile(checkpointer=MemorySaver())
+    else:
+        app = workflow.compile()
     logging.info("Graph compiled")
     return app
