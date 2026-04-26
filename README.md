@@ -12,31 +12,34 @@ The following diagram illustrates the flow of information within the CogniGraph 
 
 ```mermaid
 graph TD
-    subgraph "User Interaction (Streamlit UI)"
+    subgraph "User Interaction (Streamlit or Agent UI)"
         A[User Input] --> B{LangGraph Agent};
         B --> C[Display Response];
     end
 
     subgraph "LangGraph Core Logic"
-        B --> D(chat: Entry Point);
-        D --> E{router};
-        E -- Needs Web Search --> F[search: Tavily API];
-        F --> G[chat: Formulate Response w/ LLM];
-        E -- Direct Answer --> G;
-        G --> B;
+        B --> D[extract_preference];
+        D --> E{intent check};
+        E -- Summary Request --> F[summarize node];
+        E -- Normal Chat --> G[assistant node];
+        G --> H{tool call?};
+        H -- yes --> I[Tavily ToolNode];
+        I --> G;
+        H -- no --> B;
+        F --> B;
     end
 
     subgraph "Data & Persistence"
-        B --> H[(SQLite DB<br>User Preferences)];
-        I[End Session Button] --> J{Summarization Chain w/ LLM};
-        J --> K([Obsidian Vault<br>Save as .md]);
+        D --> J[(SQLite DB<br>User Preferences)];
+        K[End Session Button] --> L[/summarize via graph/];
+        L --> M([Obsidian Vault<br>Save as .md]);
     end
 
     style A fill:#cde4ff
     style C fill:#cde4ff
-    style I fill:#ffcdd2
-    style K fill:#d4edda
-    style H fill:#fff2cc
+    style K fill:#ffcdd2
+    style M fill:#d4edda
+    style J fill:#fff2cc
     style E fill:#e0cffc
 
 ```
@@ -46,11 +49,11 @@ graph TD
 - **Conversational AI**: Engage in a natural conversation to ask questions and learn.
 - **LLM Agnostic**: Easily switch between a locally hosted Ollama model (e.g., Gemma, Llama) and OpenAI's models (e.g., GPT-4o) via a simple configuration change.
 - **Web Search**: Integrates with Tavily Search API to provide current information on any topic.
-- **Intelligent Routing**: The agent decides whether to answer from its existing knowledge or perform a web search.
-- **Automated Summarization**: At the end of a session, the agent summarizes the entire conversation, highlighting key takeaways.
+- **Native Tool Calling**: Uses LangChain tool binding + LangGraph `ToolNode` for web search.
+- **In-Graph Summarization**: Summarization is part of the same graph and works from both Streamlit and Agent UI.
 - **Obsidian Integration**: Automatically saves summaries as Markdown files in a specified Obsidian vault, creating links between concepts for graph visualization.
 - **Persistent Memory**: Stable user preferences are extracted and stored as key-value pairs in a local SQLite database.
-- **Simple UI**: A clean and straightforward chat interface built with Streamlit.
+- **Dual UI Support**: Works in Streamlit and in Agent UI / LangGraph Studio.
 - **Logging**: Detailed logs are generated in the `logs/` directory for easy debugging and monitoring.
 
 ## Project Structure
@@ -59,10 +62,10 @@ graph TD
 .
 ├── src/
 │   └── cognigraph/
-│       ├── ui.py           # Streamlit UI + app workflow
-│       ├── graph.py        # LangGraph workflow
+│       ├── ui.py           # Streamlit UI
+│       ├── graph.py        # Unified LangGraph workflow (chat + tools + summarization)
 │       ├── llm.py          # LLM provider factory
-│       ├── server_graphs.py # LangGraph API entrypoints
+│       ├── server_graphs.py # LangGraph API entrypoint
 │       ├── db.py           # SQLite persistence layer
 │       ├── config.py       # Environment config loader
 │       └── logging_setup.py
@@ -77,7 +80,7 @@ graph TD
 ## Setup and Installation
 
 1.  **Prerequisites**:
-    *   Python 3.11+
+    *   Python 3.12+
     *   An active internet connection
     *   (Optional) [Ollama](https://ollama.com/) installed and running for local LLM usage.
 
@@ -123,54 +126,54 @@ OBSIDIAN_VAULT_PATH="C:/Users/YourUser/Documents/ObsidianVault"
 
 ## Usage
 
-1.  **Install dependencies** (if not already done):
+### Option A: Streamlit App
+
+1.  Install dependencies (if not already done):
     ```bash
     uv sync
     ```
 
-2.  **(Optional) Start Ollama**: If you are using `LLM_PROVIDER="ollama"`, make sure your Ollama application is running and the specified model (`gemma` by default) is downloaded.
+2.  (Optional) Start Ollama if `LLM_PROVIDER="ollama"`:
     ```bash
     ollama run gemma
     ```
 
-3.  **Run the Application**:
-    Start the Streamlit application from your terminal.
-
+3.  Start Streamlit:
     ```bash
     uv run streamlit run app.py
     ```
 
-4.  **Interact with the Agent**:
-    - Open the URL provided by Streamlit (usually `http://localhost:8501`) in your web browser.
-    - Type your questions into the chat input at the bottom of the page.
+4.  Open the Streamlit URL (usually `http://localhost:8501`) and chat normally.
 
-5.  **Save Notes**:
-    - When you are finished with a topic, click the **"End Session & Save Notes"** button.
-    - The agent will summarize the conversation and save it as a new Markdown file in the `AINotes` folder inside your specified Obsidian vault.
+5.  Summarize conversation:
+    - Type `/summarize` in chat, or
+    - Click **End Session & Save Notes** (this now triggers summarization through the same graph).
 
-## LangGraph API + Agent Chat UI (Local)
+6.  If Obsidian path is configured, summary is saved under `AINotes/` in your vault.
 
-You can run the graph as an API and connect LangChain Agent Chat UI locally.
+### Option B: LangGraph API + Agent UI / Studio (Local)
+
+Run the unified graph as an API and connect from Agent UI or Studio.
 
 1.  **Start local LangGraph API server**:
-    If your environment blocks spawning `langgraph` (Application Control), use the Python module entrypoint instead:
-    ```bash
-    uv run python -m langgraph_api.cli --config langgraph.json
-    ```
-
-    If `langgraph dev` / module entrypoint asks for `langgraph-api`, install the in-memory runtime first:
-    ```bash
-    .\\.venv\\Scripts\\python.exe -m pip install "langgraph-cli[inmem]"
-    ```
-
-    Then you can also start with the regular command:
+    Standard command:
     ```bash
     uv run langgraph dev
     ```
 
-    Expected local endpoint is typically `http://localhost:2024`.
+    If your environment blocks `langgraph` directly due to Application Control, use:
+    ```bash
+    uv run python -m langgraph_api.cli --config langgraph.json
+    ```
 
-2.  **Start Agent Chat UI**:
+    API endpoint is typically `http://127.0.0.1:2024`.
+
+2.  **Open Agent UI / Studio**:
+    - `uv run langgraph dev` prints a Studio URL automatically.
+    - Or open manually:
+      `https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`
+
+3.  **(Optional) Run standalone Agent Chat UI app**:
     ```bash
     npx create-agent-chat-app --project-name cognigraph-chat-ui
     cd cognigraph-chat-ui
@@ -178,10 +181,14 @@ You can run the graph as an API and connect LangChain Agent Chat UI locally.
     pnpm dev
     ```
 
-3.  **Connect UI to your local graph**:
+4.  **Connect UI to your local graph**:
     - Graph ID: `cognigraph`
-    - Deployment URL: `http://localhost:2024`
+    - Deployment URL: `http://127.0.0.1:2024`
     - LangSmith key: optional for local usage
+
+5.  **Trigger summarization in Agent UI**:
+    - Send `/summarize` in chat.
+    - The same unified graph handles chat, tools, and summarization.
 
 This setup is configured via [langgraph.json](langgraph.json).
 

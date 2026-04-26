@@ -11,7 +11,7 @@ if str(SRC_DIR) not in sys.path:
 
 from cognigraph.config import load_settings
 from cognigraph.db import initialize_database
-from cognigraph.graph import build_graph, build_summary_graph
+from cognigraph.graph import build_graph
 from cognigraph.llm import get_llm
 from cognigraph.logging_setup import configure_logging
 
@@ -25,6 +25,3 @@ _llm = get_llm(settings)
 
 # Primary graph to connect from Agent Chat UI.
 graph = build_graph(_llm)
-
-# Optional secondary graph (useful for internal APIs/tests).
-summary_graph = build_summary_graph(_llm)

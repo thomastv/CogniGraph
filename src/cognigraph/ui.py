@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from cognigraph.config import load_settings
 from cognigraph.db import initialize_database
-from cognigraph.graph import build_graph, build_summary_graph
+from cognigraph.graph import build_graph
 from cognigraph.llm import get_llm
 from cognigraph.logging_setup import configure_logging
 
@@ -25,7 +25,6 @@ def render_app() -> None:
 
     llm = get_llm(settings)
     app = build_graph(llm)
-    summary_app = build_summary_graph(llm)
 
     st.title("CogniGraph 🧠")
 
@@ -63,16 +62,16 @@ def render_app() -> None:
     if st.button("End Session & Save Notes"):
         logging.info("'End Session & Save Notes' button clicked")
 
-        history_string = "\n".join(
-            [
-                f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}"
-                for m in st.session_state.messages
-            ]
+        logging.info("Invoking unified graph summarization")
+        summary_response = app.invoke(
+            {
+                "messages": [
+                    *st.session_state.messages,
+                    HumanMessage(content="/summarize"),
+                ]
+            }
         )
-
-        logging.info("Invoking summary graph")
-        summary_response = summary_app.invoke({"conversation_history": history_string})
-        summary = summary_response["summary"]
+        summary = summary_response["messages"][-1].content
 
         logging.info("Summarization complete")
 

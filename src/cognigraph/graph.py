@@ -24,6 +24,16 @@ class PreferenceExtraction(BaseModel):
 SavePreferenceFn = Callable[[str, str], None]
 
 
+SUMMARY_COMMANDS = (
+    "/summarize",
+    "/summary",
+    "summarize this conversation",
+    "summarise this conversation",
+    "summarize this chat",
+    "summarise this chat",
+)
+
+
 def _message_content(message: Any) -> str:
     """Extract message content from dict-style or message-object inputs."""
     if isinstance(message, dict):
@@ -50,6 +60,41 @@ def _normalize_messages(messages: List[Any]) -> List[AnyMessage]:
             continue
         normalized.append(HumanMessage(content=str(message)))
     return normalized
+
+
+def _wants_summary(message_text: str) -> bool:
+    """Heuristic trigger for summarization requests from any chat client."""
+    normalized = message_text.strip().lower()
+    if not normalized:
+        return False
+    if normalized in SUMMARY_COMMANDS:
+        return True
+    if "summar" in normalized and any(
+        token in normalized for token in ("conversation", "chat", "session", "so far")
+    ):
+        return True
+    return False
+
+
+def _conversation_history_from_messages(messages: List[AnyMessage]) -> str:
+    """Build a plain-text transcript suitable for LLM summarization prompts."""
+    working_messages = list(messages)
+    if working_messages:
+        latest = working_messages[-1]
+        if isinstance(latest, HumanMessage) and _wants_summary(_message_content(latest)):
+            working_messages = working_messages[:-1]
+
+    history_lines: List[str] = []
+    for message in working_messages:
+        content = _message_content(message).strip()
+        if not content:
+            continue
+        if isinstance(message, HumanMessage):
+            history_lines.append(f"User: {content}")
+        elif isinstance(message, AIMessage):
+            history_lines.append(f"AI: {content}")
+
+    return "\n".join(history_lines)
 
 
 def make_extract_preference_node(
@@ -121,6 +166,43 @@ def make_assistant_node(llm_with_tools):
     return assistant_node
 
 
+def make_summarize_node(llm):
+    """Create a node that summarizes the in-graph conversation history."""
+    summarization_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a helpful assistant that summarizes conversations. "
+                "Your summary should be concise and include key points. "
+                "Wrap related concepts in double brackets for Obsidian graph view, like [[this]].",
+            ),
+            ("human", "Please summarize the following conversation:\n\n{conversation_history}"),
+        ]
+    )
+    summarization_chain = summarization_prompt | llm | StrOutputParser()
+
+    def summarize_node(state):
+        logging.info("Executing summarize node")
+        if not state.get("messages"):
+            return {"messages": [AIMessage(content="No conversation found to summarize yet.")]}
+
+        messages = _normalize_messages(state["messages"])
+        conversation_history = _conversation_history_from_messages(messages)
+        if not conversation_history:
+            return {
+                "messages": [
+                    AIMessage(content="I need more conversation context before I can summarize.")
+                ]
+            }
+
+        summary = summarization_chain.invoke(
+            {"conversation_history": conversation_history}
+        )
+        return {"messages": [AIMessage(content=summary)]}
+
+    return summarize_node
+
+
 def build_graph(
     llm,
     save_preference_fn: SavePreferenceFn | None = None,
@@ -137,59 +219,37 @@ def build_graph(
         persistence_callback,
     )
     assistant_node = make_assistant_node(llm_with_tools)
+    summarize_node = make_summarize_node(llm)
+
+    def route_after_preference(state):
+        messages = _normalize_messages(state.get("messages", []))
+        if not messages:
+            return "assistant"
+        latest = messages[-1]
+        if isinstance(latest, HumanMessage) and _wants_summary(_message_content(latest)):
+            return "summarize"
+        return "assistant"
 
     workflow = StateGraph(AgentState)
     workflow.add_node("extract_preference", extract_preference_node)
     workflow.add_node("assistant", assistant_node)
+    workflow.add_node("summarize", summarize_node)
     workflow.add_node("tools", ToolNode([tavily_tool]))
 
-    workflow.add_edge("extract_preference", "assistant")
+    workflow.add_conditional_edges(
+        "extract_preference",
+        route_after_preference,
+        {"summarize": "summarize", "assistant": "assistant"},
+    )
     workflow.add_conditional_edges(
         "assistant",
         tools_condition,
         {"tools": "tools", END: END},
     )
     workflow.add_edge("tools", "assistant")
+    workflow.add_edge("summarize", END)
     workflow.set_entry_point("extract_preference")
 
     app = workflow.compile()
     logging.info("Graph compiled")
     return app
-
-
-class SummaryState(TypedDict):
-    conversation_history: str
-    summary: str
-
-
-def build_summary_graph(llm):
-    """Build and compile a graph dedicated to session summarization."""
-
-    def summarize_node(state: SummaryState):
-        logging.info("Executing summarize node")
-        summarization_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful assistant that summarizes conversations. "
-                    "Your summary should be concise and include key points. "
-                    "Wrap related concepts in double brackets for Obsidian graph view, like [[this]].",
-                ),
-                ("human", "Please summarize the following conversation:\n\n{conversation_history}"),
-            ]
-        )
-
-        summarization_chain = summarization_prompt | llm | StrOutputParser()
-        summary = summarization_chain.invoke(
-            {"conversation_history": state["conversation_history"]}
-        )
-        return {"summary": summary}
-
-    workflow = StateGraph(SummaryState)
-    workflow.add_node("summarize", summarize_node)
-    workflow.add_edge("summarize", END)
-    workflow.set_entry_point("summarize")
-
-    summary_app = workflow.compile()
-    logging.info("Summary graph compiled")
-    return summary_app
